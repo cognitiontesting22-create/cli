@@ -309,13 +309,34 @@ func (cmd *Command) VisiblePersistentFlags() []Flag {
 	if cmd.isCompletionCommand {
 		return nil
 	}
-	var flags []Flag
-	for _, fl := range cmd.Root().Flags {
-		pfl, ok := fl.(LocalFlag)
-		if !ok || pfl.IsLocal() {
-			continue
+	seen := map[string]struct{}{}
+	for _, fl := range cmd.Flags {
+		for _, name := range fl.Names() {
+			seen[name] = struct{}{}
 		}
-		flags = append(flags, fl)
+	}
+	var flags []Flag
+	for p := cmd.parent; p != nil; p = p.parent {
+		for _, fl := range p.Flags {
+			pfl, ok := fl.(LocalFlag)
+			if !ok || pfl.IsLocal() {
+				continue
+			}
+			shadowed := false
+			for _, name := range fl.Names() {
+				if _, ok := seen[name]; ok {
+					shadowed = true
+					break
+				}
+			}
+			if shadowed {
+				continue
+			}
+			for _, name := range fl.Names() {
+				seen[name] = struct{}{}
+			}
+			flags = append(flags, fl)
+		}
 	}
 	return visibleFlags(flags)
 }

@@ -2286,3 +2286,85 @@ func TestCustomUsageCommandHelp(t *testing.T) {
 	_ = cmd.Run(buildTestContext(t), []string{"app", "help"})
 	assert.Contains(t, out.String(), UsageCommandHelp)
 }
+
+func TestShowSubcommandHelp_PersistentFlagsFromAllAncestors(t *testing.T) {
+	out := &bytes.Buffer{}
+	cmd := &Command{
+		Name:   "root",
+		Writer: out,
+		Flags: []Flag{
+			&StringFlag{Name: "root-persistent", Usage: "persistent flag on root"},
+			&StringFlag{Name: "root-hidden", Usage: "hidden persistent flag on root", Hidden: true},
+			&StringFlag{Name: "shadowed", Usage: "root definition"},
+		},
+		Commands: []*Command{{
+			Name: "mid",
+			Flags: []Flag{
+				&StringFlag{Name: "mid-persistent", Usage: "persistent flag on mid"},
+				&StringFlag{Name: "mid-local", Usage: "local flag on mid", Local: true},
+				&StringFlag{Name: "shadowed", Usage: "mid definition"},
+			},
+			Commands: []*Command{{
+				Name: "leaf",
+				Flags: []Flag{
+					&StringFlag{Name: "leaf-local", Usage: "local flag on leaf"},
+					&StringFlag{Name: "mid-persistent", Usage: "leaf definition"},
+				},
+			}},
+		}},
+	}
+
+	r := require.New(t)
+	r.NoError(cmd.Run(buildTestContext(t), []string{"root", "mid", "leaf", "--help"}))
+
+	r.Equal(`NAME:
+   root mid leaf
+
+USAGE:
+   root mid leaf [options]
+
+OPTIONS:
+   --leaf-local string      local flag on leaf
+   --mid-persistent string  leaf definition
+   --help, -h               show help
+
+GLOBAL OPTIONS:
+   --shadowed string         mid definition
+   --root-persistent string  persistent flag on root
+`, out.String())
+
+	out.Reset()
+	r.NoError(cmd.Run(buildTestContext(t), []string{"root", "mid", "--help"}))
+	s := out.String()
+	r.Contains(s, "GLOBAL OPTIONS:\n   --root-persistent string  persistent flag on root\n")
+	r.NotContains(s, "root definition")
+	r.NotContains(s, "root-hidden")
+	r.Equal(1, strings.Count(s, "--shadowed"))
+	r.Equal(1, strings.Count(s, "--mid-persistent"))
+
+	out.Reset()
+	r.NoError(cmd.Run(buildTestContext(t), []string{"root", "--help"}))
+	s = out.String()
+	r.Equal(1, strings.Count(s, "GLOBAL OPTIONS:"))
+	r.NotContains(s, "mid-persistent")
+}
+
+func TestPersistentFlagsFromIntermediateCommandParse(t *testing.T) {
+	var got string
+	cmd := &Command{
+		Name: "root",
+		Commands: []*Command{{
+			Name:  "mid",
+			Flags: []Flag{&StringFlag{Name: "mid-persistent"}},
+			Commands: []*Command{{
+				Name: "leaf",
+				Action: func(_ context.Context, c *Command) error {
+					got = c.String("mid-persistent")
+					return nil
+				},
+			}},
+		}},
+	}
+	require.NoError(t, cmd.Run(buildTestContext(t), []string{"root", "mid", "leaf", "--mid-persistent", "X"}))
+	require.Equal(t, "X", got)
+}
