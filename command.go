@@ -304,18 +304,34 @@ func (cmd *Command) appendFlag(fl Flag) {
 	}
 }
 
-// VisiblePersistentFlags returns a slice of [LocalFlag] with Persistent=true and Hidden=false.
+// VisiblePersistentFlags returns visible flags inherited from ancestors with
+// [LocalFlag.IsLocal] returning false. Flags shadowed by a nearer command's
+// flag name or alias are excluded.
 func (cmd *Command) VisiblePersistentFlags() []Flag {
 	if cmd.isCompletionCommand {
 		return nil
 	}
 	var flags []Flag
-	for _, fl := range cmd.Root().Flags {
-		pfl, ok := fl.(LocalFlag)
-		if !ok || pfl.IsLocal() {
-			continue
+	seen := map[string]bool{}
+	for pCmd := cmd; pCmd != nil; pCmd = pCmd.parent {
+		for _, fl := range pCmd.allFlags() {
+			shadowed := false
+			for _, name := range fl.Names() {
+				if seen[name] {
+					shadowed = true
+				}
+				// Even hidden and local flags shadow more distant definitions.
+				seen[name] = true
+			}
+			if pCmd == cmd || shadowed {
+				continue
+			}
+			pfl, ok := fl.(LocalFlag)
+			if !ok || pfl.IsLocal() {
+				continue
+			}
+			flags = append(flags, fl)
 		}
-		flags = append(flags, fl)
 	}
 	return visibleFlags(flags)
 }
