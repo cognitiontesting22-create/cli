@@ -157,6 +157,8 @@ type Command struct {
 	didSetupDefaults bool
 	// whether in shell completion mode
 	shellCompletion bool
+	// whether help was displayed via the --help/-h flag during this run
+	helpShownByFlag bool
 	// whether global help flag was added
 	globaHelpFlagAdded bool
 	// whether global version flag was added

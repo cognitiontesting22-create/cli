@@ -90,6 +90,7 @@ outer:
 // arguments are parsed according to the Flag and Command
 // definitions and the matching Action functions are run.
 func (cmd *Command) Run(ctx context.Context, osArgs []string) (deferErr error) {
+	cmd.helpShownByFlag = false
 	_, deferErr = cmd.run(ctx, osArgs)
 	return deferErr
 }
@@ -176,6 +177,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 
 		cmd.isInError = true
 		if cmd.checkHelp() {
+			cmd.Root().helpShownByFlag = true
 			if cmd.parent == nil {
 				_ = ShowRootCommandHelp(cmd)
 			} else {
@@ -210,6 +212,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 	}
 
 	if cmd.checkHelp() {
+		cmd.Root().helpShownByFlag = true
 		return ctx, helpCommandAction(ctx, cmd)
 	} else {
 		tracef("no help is wanted (cmd=%[1]q)", cmd.Name)
@@ -234,6 +237,9 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 
 	if cmd.After != nil && !cmd.Root().shellCompletion {
 		defer func() {
+			if cmd.Root().helpShownByFlag {
+				return
+			}
 			if err := cmd.After(ctx, cmd); err != nil {
 				err = cmd.handleExitCoder(ctx, err)
 

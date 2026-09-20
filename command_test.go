@@ -1810,6 +1810,186 @@ func TestCommand_AfterFunc(t *testing.T) {
 	assert.Equal(t, 0, counts.SubCommand, "Subcommand not executed when expected")
 }
 
+func TestCommand_SubcommandHelpFlagDoesNotRunAfterWithoutBefore(t *testing.T) {
+	newApp := func() (*Command, *[]string) {
+		var log []string
+		app := &Command{
+			Name:   "app",
+			Writer: io.Discard,
+			Before: func(ctx context.Context, _ *Command) (context.Context, error) {
+				log = append(log, "app.Before")
+				return ctx, nil
+			},
+			After: func(context.Context, *Command) error {
+				log = append(log, "app.After")
+				return nil
+			},
+			Commands: []*Command{{
+				Name:   "sub",
+				Action: func(context.Context, *Command) error { return nil },
+			}},
+		}
+		return app, &log
+	}
+
+	t.Run("subcommand --help", func(t *testing.T) {
+		app, log := newApp()
+		require.NoError(t, app.Run(buildTestContext(t), []string{"app", "sub", "--help"}))
+		require.Empty(t, *log)
+	})
+
+	t.Run("subcommand -h", func(t *testing.T) {
+		app, log := newApp()
+		require.NoError(t, app.Run(buildTestContext(t), []string{"app", "sub", "-h"}))
+		require.Empty(t, *log)
+	})
+
+	t.Run("subcommand --help with trailing argument", func(t *testing.T) {
+		app, log := newApp()
+		_ = app.Run(buildTestContext(t), []string{"app", "sub", "--help", "nested"})
+		require.Empty(t, *log)
+	})
+}
+
+func TestCommand_SubcommandHelpFlagDoesNotRunAncestorAfter(t *testing.T) {
+	var log []string
+	app := &Command{
+		Name:   "app",
+		Writer: io.Discard,
+		Before: func(ctx context.Context, _ *Command) (context.Context, error) {
+			log = append(log, "app.Before")
+			return ctx, nil
+		},
+		After: func(context.Context, *Command) error {
+			log = append(log, "app.After")
+			return nil
+		},
+		Commands: []*Command{{
+			Name: "sub",
+			Before: func(ctx context.Context, _ *Command) (context.Context, error) {
+				log = append(log, "sub.Before")
+				return ctx, nil
+			},
+			After: func(context.Context, *Command) error {
+				log = append(log, "sub.After")
+				return nil
+			},
+			Commands: []*Command{{
+				Name:   "nested",
+				Action: func(context.Context, *Command) error { return nil },
+			}},
+		}},
+	}
+
+	require.NoError(t, app.Run(buildTestContext(t), []string{"app", "sub", "nested", "--help"}))
+	require.Empty(t, log)
+}
+
+func TestCommand_HelpFlagSkipsAfterForAncestorWithoutBefore(t *testing.T) {
+	var log []string
+	app := &Command{
+		Name:   "app",
+		Writer: io.Discard,
+		After: func(context.Context, *Command) error {
+			log = append(log, "app.After")
+			return nil
+		},
+		Commands: []*Command{{
+			Name:   "sub",
+			Action: func(context.Context, *Command) error { return nil },
+		}},
+	}
+
+	require.NoError(t, app.Run(buildTestContext(t), []string{"app", "sub", "--help"}))
+	require.Empty(t, log)
+}
+
+func TestCommand_BeforeAfterOrderPreserved(t *testing.T) {
+	var log []string
+	app := &Command{
+		Name:   "app",
+		Writer: io.Discard,
+		Before: func(ctx context.Context, _ *Command) (context.Context, error) {
+			log = append(log, "app.Before")
+			return ctx, nil
+		},
+		After: func(context.Context, *Command) error {
+			log = append(log, "app.After")
+			return nil
+		},
+		Commands: []*Command{{
+			Name: "sub",
+			Before: func(ctx context.Context, _ *Command) (context.Context, error) {
+				log = append(log, "sub.Before")
+				return ctx, nil
+			},
+			After: func(context.Context, *Command) error {
+				log = append(log, "sub.After")
+				return nil
+			},
+			Action: func(context.Context, *Command) error {
+				log = append(log, "sub.Action")
+				return nil
+			},
+		}},
+	}
+
+	require.NoError(t, app.Run(buildTestContext(t), []string{"app", "sub"}))
+	require.Equal(t, []string{"app.Before", "sub.Before", "sub.Action", "sub.After", "app.After"}, log)
+}
+
+func TestCommand_HelpCommandKeepsBeforeAfterPaired(t *testing.T) {
+	newApp := func() (*Command, *[]string) {
+		var log []string
+		app := &Command{
+			Name:   "app",
+			Writer: io.Discard,
+			Before: func(ctx context.Context, _ *Command) (context.Context, error) {
+				log = append(log, "app.Before")
+				return ctx, nil
+			},
+			After: func(context.Context, *Command) error {
+				log = append(log, "app.After")
+				return nil
+			},
+			Commands: []*Command{{
+				Name: "sub",
+				Before: func(ctx context.Context, _ *Command) (context.Context, error) {
+					log = append(log, "sub.Before")
+					return ctx, nil
+				},
+				After: func(context.Context, *Command) error {
+					log = append(log, "sub.After")
+					return nil
+				},
+				Action: func(context.Context, *Command) error {
+					log = append(log, "sub.Action")
+					return nil
+				},
+			}},
+		}
+		return app, &log
+	}
+
+	t.Run("app help", func(t *testing.T) {
+		app, log := newApp()
+		require.NoError(t, app.Run(buildTestContext(t), []string{"app", "help"}))
+		require.Equal(t, []string{"app.Before", "app.After"}, *log)
+	})
+
+	t.Run("app help sub", func(t *testing.T) {
+		app, log := newApp()
+		require.NoError(t, app.Run(buildTestContext(t), []string{"app", "help", "sub"}))
+		require.Equal(t, []string{"app.Before", "app.After"}, *log)
+	})
+
+	t.Run("app sub help", func(t *testing.T) {
+		app, log := newApp()
+		require.NoError(t, app.Run(buildTestContext(t), []string{"app", "sub", "help"}))
+		require.Equal(t, []string{"app.Before", "sub.Before", "sub.After", "app.After"}, *log)
+	})
+}
+
 func TestCommandNoHelpFlag(t *testing.T) {
 	oldFlag := HelpFlag
 	defer func() {
