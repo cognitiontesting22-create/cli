@@ -255,18 +255,20 @@ func DefaultCompleteWithFlags(ctx context.Context, cmd *Command) {
 	} else {
 		tracef("running default complete with os.Args flags[%v]", args)
 	}
-	argsLen := len(args)
 	lastArg := ""
-	// parent command will have --generate-shell-completion so we need
-	// to account for that
-	if argsLen > 1 {
-		lastArg = args[argsLen-2]
-	} else if argsLen > 0 {
-		lastArg = args[argsLen-1]
-	}
-
-	if lastArg == completionFlag {
-		lastArg = ""
+	// The token being completed is the last argument. At the root command the
+	// completion marker (--generate-shell-completion) is still appended to
+	// os.Args, so the token is the argument before it. For subcommands the
+	// marker has already been stripped from the parsed args, so the token is
+	// simply the final argument.
+	if argsLen := len(args); argsLen > 0 {
+		if args[argsLen-1] == completionFlag {
+			if argsLen > 1 {
+				lastArg = args[argsLen-2]
+			}
+		} else {
+			lastArg = args[argsLen-1]
+		}
 	}
 
 	if strings.HasPrefix(lastArg, "-") {
