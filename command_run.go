@@ -181,7 +181,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 			} else {
 				_ = ShowSubcommandHelp(cmd)
 			}
-			return ctx, nil
+			return context.WithValue(ctx, helpFlagContextKey, true), nil
 		}
 		if cmd.OnUsageError != nil {
 			err = cmd.OnUsageError(ctx, cmd, err, cmd.parent != nil)
@@ -210,7 +210,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 	}
 
 	if cmd.checkHelp() {
-		return ctx, helpCommandAction(ctx, cmd)
+		return context.WithValue(ctx, helpFlagContextKey, true), helpCommandAction(ctx, cmd)
 	} else {
 		tracef("no help is wanted (cmd=%[1]q)", cmd.Name)
 	}
@@ -234,6 +234,9 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 
 	if cmd.After != nil && !cmd.Root().shellCompletion {
 		defer func() {
+			if help, _ := ctx.Value(helpFlagContextKey).(bool); help {
+				return
+			}
 			if err := cmd.After(ctx, cmd); err != nil {
 				err = cmd.handleExitCoder(ctx, err)
 

@@ -13,6 +13,11 @@ const (
 	ignoreFlagPrefix = "test."
 
 	commandContextKey = contextKey("cli.context")
+
+	// helpFlagContextKey is set on the context when help is displayed
+	// via the --help/-h flag so that ancestor commands can skip their
+	// After callbacks, since their Before callbacks never ran.
+	helpFlagContextKey = contextKey("cli.helpFlag")
 )
 
 type contextKey string

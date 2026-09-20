@@ -6253,3 +6253,124 @@ func TestCommand_Walk_NilFn(t *testing.T) {
 	cmd := &Command{Name: "foo"}
 	assert.Nil(t, cmd.Walk(nil))
 }
+
+func TestCommand_SubCommandHelpSkipsBeforeAfter(t *testing.T) {
+	// buildCmd builds a command tree app -> sub -> nested where every
+	// command logs its Before/After invocations.
+	buildCmd := func() (*Command, *[]string) {
+		log := &[]string{}
+
+		logger := func(name string) (BeforeFunc, AfterFunc) {
+			return func(ctx context.Context, _ *Command) (context.Context, error) {
+					*log = append(*log, name+".Before")
+					return ctx, nil
+				}, func(context.Context, *Command) error {
+					*log = append(*log, name+".After")
+					return nil
+				}
+		}
+
+		appBefore, appAfter := logger("app")
+		subBefore, subAfter := logger("sub")
+		nestedBefore, nestedAfter := logger("nested")
+
+		return &Command{
+			Name:   "app",
+			Before: appBefore,
+			After:  appAfter,
+			Commands: []*Command{{
+				Name:   "sub",
+				Before: subBefore,
+				After:  subAfter,
+				Action: func(context.Context, *Command) error { return nil },
+				Commands: []*Command{{
+					Name:   "nested",
+					Before: nestedBefore,
+					After:  nestedAfter,
+					Action: func(context.Context, *Command) error { return nil },
+				}},
+			}},
+			Writer: io.Discard,
+		}, log
+	}
+
+	for _, args := range [][]string{
+		{"app", "sub", "--help"},
+		{"app", "sub", "-h"},
+		{"app", "sub", "--help", "nested"},
+		{"app", "sub", "nested", "--help"},
+		{"app", "sub", "nested", "-h"},
+		{"app", "--help"},
+		{"app", "-h"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			cmd, log := buildCmd()
+			require.NoError(t, cmd.Run(buildTestContext(t), args))
+			assert.Empty(t, *log, "no Before/After callbacks should run when help is displayed")
+		})
+	}
+
+	t.Run("app sub --help with After-only parent", func(t *testing.T) {
+		var log []string
+		cmd := &Command{
+			Name: "app",
+			After: func(context.Context, *Command) error {
+				log = append(log, "app.After")
+				return nil
+			},
+			Commands: []*Command{{
+				Name:   "sub",
+				Action: func(context.Context, *Command) error { return nil },
+			}},
+			Writer: io.Discard,
+		}
+		require.NoError(t, cmd.Run(buildTestContext(t), []string{"app", "sub", "--help"}))
+		assert.Empty(t, log)
+	})
+
+	t.Run("normal run order is preserved", func(t *testing.T) {
+		cmd, log := buildCmd()
+		require.NoError(t, cmd.Run(buildTestContext(t), []string{"app", "sub"}))
+		assert.Equal(t, []string{"app.Before", "sub.Before", "sub.After", "app.After"}, *log)
+	})
+
+	t.Run("normal nested run order is preserved", func(t *testing.T) {
+		cmd, log := buildCmd()
+		require.NoError(t, cmd.Run(buildTestContext(t), []string{"app", "sub", "nested"}))
+		assert.Equal(t, []string{
+			"app.Before", "sub.Before", "nested.Before",
+			"nested.After", "sub.After", "app.After",
+		}, *log)
+	})
+
+	t.Run("after runs when action errors", func(t *testing.T) {
+		cmd, log := buildCmd()
+		sub := cmd.Commands[0]
+		sub.Action = func(context.Context, *Command) error {
+			return errors.New("action error")
+		}
+		err := cmd.Run(buildTestContext(t), []string{"app", "sub"})
+		require.Error(t, err)
+		assert.Equal(t, []string{"app.Before", "sub.Before", "sub.After", "app.After"}, *log)
+	})
+
+	for _, args := range [][]string{
+		{"app", "help"},
+		{"app", "help", "sub"},
+		{"app", "sub", "help"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			cmd, log := buildCmd()
+			require.NoError(t, cmd.Run(buildTestContext(t), args))
+			// Before/After of commands that ran stay paired.
+			for _, entry := range *log {
+				name := strings.Split(entry, ".")[0]
+				if strings.HasSuffix(entry, ".Before") {
+					assert.Contains(t, *log, name+".After")
+				} else {
+					assert.Contains(t, *log, name+".Before")
+				}
+			}
+		})
+	}
+}
