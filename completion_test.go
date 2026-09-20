@@ -435,6 +435,189 @@ func TestCompletionSubcommand(t *testing.T) {
 	}
 }
 
+func TestCompletionPartialFlagAfterPositionalArgs(t *testing.T) {
+	// Partial flags must be completed regardless of how many positional
+	// arguments precede them, at any command depth.
+	tests := []struct {
+		name     string
+		args     []string
+		expected string
+	}{
+		{
+			name:     "subcommand no positional",
+			args:     []string{"foo", "sub", "--pa", completionFlag},
+			expected: "--par1\n--par2\n",
+		},
+		{
+			name:     "subcommand one positional",
+			args:     []string{"foo", "sub", "value", "--pa", completionFlag},
+			expected: "--par1\n--par2\n",
+		},
+		{
+			name:     "subcommand two positionals",
+			args:     []string{"foo", "sub", "first", "second", "--pa", completionFlag},
+			expected: "--par1\n--par2\n",
+		},
+		{
+			name:     "subcommand positional then single dash lists all visible flags",
+			args:     []string{"foo", "sub", "value", "-", completionFlag},
+			expected: "--par1\n--par2\n--flag\n--help:show help\n",
+		},
+		{
+			name:     "subcommand positional then double dash lists long flags",
+			args:     []string{"foo", "sub", "value", "--", completionFlag},
+			expected: "--par1\n--par2\n--flag\n--help:show help\n",
+		},
+		{
+			name:     "subcommand positional no flag suggests subcommands",
+			args:     []string{"foo", "sub", "value", completionFlag},
+			expected: "nested\nhelp:Shows a list of commands or help for one command\n",
+		},
+		{
+			name:     "nested no positional",
+			args:     []string{"foo", "sub", "nested", "--pa", completionFlag},
+			expected: "--path\n",
+		},
+		{
+			name:     "nested one positional",
+			args:     []string{"foo", "sub", "nested", "value", "--pa", completionFlag},
+			expected: "--path\n",
+		},
+		{
+			name:     "nested two positionals",
+			args:     []string{"foo", "sub", "nested", "first", "second", "--pa", completionFlag},
+			expected: "--path\n",
+		},
+		{
+			name:     "subcommand positional then double dash separator then partial flag",
+			args:     []string{"foo", "sub", "value", "--", "--pa", completionFlag},
+			expected: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			out := &bytes.Buffer{}
+			actionRan := false
+			action := func(ctx context.Context, c *Command) error {
+				actionRan = true
+				return nil
+			}
+
+			cmd := &Command{
+				Name:                  "foo",
+				EnableShellCompletion: true,
+				Writer:                out,
+				Action:                action,
+				Commands: []*Command{
+					{
+						Name: "sub",
+						Flags: []Flag{
+							&StringFlag{Name: "par1"},
+							&StringFlag{Name: "par2"},
+							&BoolFlag{Name: "flag"},
+							&StringFlag{Name: "secret", Hidden: true},
+						},
+						Action: action,
+						Commands: []*Command{
+							{
+								Name: "nested",
+								Flags: []Flag{
+									&StringFlag{Name: "path"},
+									&BoolFlag{Name: "verbose"},
+								},
+								Action: action,
+							},
+						},
+					},
+				},
+			}
+
+			r := require.New(t)
+			r.NoError(cmd.Run(buildTestContext(t), test.args))
+			r.Equal(test.expected, out.String())
+			r.False(actionRan, "command action must not run for a completion request")
+		})
+	}
+}
+
+func TestCompletionPartialFlagAfterPositionalRoot(t *testing.T) {
+	origArgv := os.Args
+	t.Cleanup(func() { os.Args = origArgv })
+
+	for _, argv := range [][]string{
+		{"foo", "--pa", completionFlag},
+		{"foo", "value", "--pa", completionFlag},
+	} {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			out := &bytes.Buffer{}
+			actionRan := false
+			cmd := &Command{
+				Name:                  "foo",
+				EnableShellCompletion: true,
+				Writer:                out,
+				Flags: []Flag{
+					&StringFlag{Name: "par1"},
+					&BoolFlag{Name: "other"},
+				},
+				Action: func(ctx context.Context, c *Command) error {
+					actionRan = true
+					return nil
+				},
+			}
+
+			os.Args = argv
+			r := require.New(t)
+			r.NoError(cmd.Run(buildTestContext(t), argv))
+			r.Equal("--par1\n", out.String())
+			r.False(actionRan)
+		})
+	}
+}
+
+func TestCompletionPartialFlagAfterPositionalCustomShellComplete(t *testing.T) {
+	var got []string
+	cmd := &Command{
+		Name:                  "foo",
+		EnableShellCompletion: true,
+		Writer:                &bytes.Buffer{},
+		Commands: []*Command{
+			{
+				Name:  "sub",
+				Flags: []Flag{&StringFlag{Name: "par1"}},
+				ShellComplete: func(ctx context.Context, c *Command) {
+					got = c.Args().Slice()
+				},
+				Action: func(ctx context.Context, c *Command) error {
+					t.Fatal("action must not run")
+					return nil
+				},
+			},
+		},
+	}
+
+	r := require.New(t)
+	r.NoError(cmd.Run(buildTestContext(t), []string{"foo", "sub", "value", "--pa", completionFlag}))
+	r.Equal([]string{"value", "--pa"}, got)
+}
+
+func TestCompletionDisabledPartialFlagAfterPositionalIsError(t *testing.T) {
+	cmd := &Command{
+		Name:   "foo",
+		Writer: &bytes.Buffer{},
+		Commands: []*Command{
+			{
+				Name:  "sub",
+				Flags: []Flag{&StringFlag{Name: "par1"}},
+			},
+		},
+	}
+
+	err := cmd.Run(buildTestContext(t), []string{"foo", "sub", "value", "--pa"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "flag provided but not defined: -pa")
+}
+
 func TestCompletionAfterDoubleDashNeverRunsAction(t *testing.T) {
 	// Regression test for https://github.com/urfave/cli/issues/1993:
 	// pressing tab on a command line that holds a "--" must never execute
