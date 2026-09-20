@@ -153,6 +153,9 @@ type Command struct {
 	parsedArgs Args
 	// track state of error handling
 	isInError bool
+	// whether help was shown via the help flag in the current run (so Before
+	// never ran and After must not run)
+	helpShown bool
 	// track state of defaults
 	didSetupDefaults bool
 	// whether in shell completion mode

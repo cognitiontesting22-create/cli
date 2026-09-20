@@ -1810,6 +1810,120 @@ func TestCommand_AfterFunc(t *testing.T) {
 	assert.Equal(t, 0, counts.SubCommand, "Subcommand not executed when expected")
 }
 
+func TestCommand_BeforeAfterPairedWithSubcommandHelp(t *testing.T) {
+	newCmd := func(log *[]string) *Command {
+		hook := func(name string) (BeforeFunc, AfterFunc) {
+			return func(ctx context.Context, _ *Command) (context.Context, error) {
+					*log = append(*log, name+".Before")
+					return ctx, nil
+				}, func(context.Context, *Command) error {
+					*log = append(*log, name+".After")
+					return nil
+				}
+		}
+		appBefore, appAfter := hook("app")
+		subBefore, subAfter := hook("sub")
+		nestedBefore, nestedAfter := hook("nested")
+		return &Command{
+			Name:   "app",
+			Writer: io.Discard,
+			Before: appBefore,
+			After:  appAfter,
+			Commands: []*Command{{
+				Name:   "sub",
+				Before: subBefore,
+				After:  subAfter,
+				Action: func(context.Context, *Command) error {
+					*log = append(*log, "sub.Action")
+					return nil
+				},
+				Commands: []*Command{{
+					Name:   "nested",
+					Before: nestedBefore,
+					After:  nestedAfter,
+					Action: func(context.Context, *Command) error {
+						*log = append(*log, "nested.Action")
+						return nil
+					},
+				}},
+			}},
+		}
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"sub help long", []string{"app", "sub", "--help"}, nil},
+		{"sub help short", []string{"app", "sub", "-h"}, nil},
+		{"sub help with trailing args", []string{"app", "sub", "--help", "nested"}, nil},
+		{"nested help", []string{"app", "sub", "nested", "--help"}, nil},
+		{"nested help short", []string{"app", "sub", "nested", "-h"}, nil},
+		{"root help", []string{"app", "--help"}, nil},
+		{"normal run", []string{"app", "sub"}, []string{"app.Before", "sub.Before", "sub.Action", "sub.After", "app.After"}},
+		{"normal nested run", []string{"app", "sub", "nested"}, []string{"app.Before", "sub.Before", "nested.Before", "nested.Action", "nested.After", "sub.After", "app.After"}},
+		{"help command root", []string{"app", "help"}, []string{"app.Before", "app.After"}},
+		{"help command sub", []string{"app", "help", "sub"}, []string{"app.Before", "app.After"}},
+		{"help command under sub", []string{"app", "sub", "help"}, []string{"app.Before", "sub.Before", "sub.After", "app.After"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var log []string
+			cmd := newCmd(&log)
+			require.NoError(t, cmd.Run(buildTestContext(t), tt.args))
+			assert.Equal(t, tt.want, log)
+		})
+	}
+}
+
+func TestCommand_AfterWithoutBeforeNotRunOnSubcommandHelp(t *testing.T) {
+	var afterCalled bool
+	cmd := &Command{
+		Name:   "app",
+		Writer: io.Discard,
+		After: func(context.Context, *Command) error {
+			afterCalled = true
+			return nil
+		},
+		Commands: []*Command{{
+			Name:   "sub",
+			Action: func(context.Context, *Command) error { return nil },
+		}},
+	}
+
+	require.NoError(t, cmd.Run(buildTestContext(t), []string{"app", "sub", "--help"}))
+	assert.False(t, afterCalled, "After ran although Before phase never happened")
+
+	require.NoError(t, cmd.Run(buildTestContext(t), []string{"app", "sub"}))
+	assert.True(t, afterCalled, "After should run on a normal run")
+}
+
+func TestCommand_AfterPairedWithBeforeOnActionError(t *testing.T) {
+	var log []string
+	actionErr := errors.New("boom")
+	cmd := &Command{
+		Name:   "app",
+		Writer: io.Discard,
+		Before: func(ctx context.Context, _ *Command) (context.Context, error) {
+			log = append(log, "app.Before")
+			return ctx, nil
+		},
+		After: func(context.Context, *Command) error {
+			log = append(log, "app.After")
+			return nil
+		},
+		Commands: []*Command{{
+			Name:   "sub",
+			Action: func(context.Context, *Command) error { return actionErr },
+		}},
+	}
+
+	require.ErrorIs(t, cmd.Run(buildTestContext(t), []string{"app", "sub"}), actionErr)
+	assert.Equal(t, []string{"app.Before", "app.After"}, log)
+}
+
 func TestCommandNoHelpFlag(t *testing.T) {
 	oldFlag := HelpFlag
 	defer func() {

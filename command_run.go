@@ -176,6 +176,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 
 		cmd.isInError = true
 		if cmd.checkHelp() {
+			markHelpShown(cmd)
 			if cmd.parent == nil {
 				_ = ShowRootCommandHelp(cmd)
 			} else {
@@ -210,6 +211,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 	}
 
 	if cmd.checkHelp() {
+		markHelpShown(cmd)
 		return ctx, helpCommandAction(ctx, cmd)
 	} else {
 		tracef("no help is wanted (cmd=%[1]q)", cmd.Name)
@@ -232,8 +234,13 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 		}
 	}
 
+	cmd.helpShown = false
 	if cmd.After != nil && !cmd.Root().shellCompletion {
 		defer func() {
+			if cmd.helpShown {
+				tracef("skipping After since help was shown and Before did not run (cmd=%[1]q)", cmd.Name)
+				return
+			}
 			if err := cmd.After(ctx, cmd); err != nil {
 				err = cmd.handleExitCoder(ctx, err)
 
@@ -388,6 +395,14 @@ func commandChain(cmd *Command) []*Command {
 	}
 	slices.Reverse(cmdChain)
 	return cmdChain
+}
+
+// markHelpShown records on cmd and all of its ancestors that help was
+// displayed via the help flag, so that no Before ran and no After must run.
+func markHelpShown(cmd *Command) {
+	for p := cmd; p != nil; p = p.parent {
+		p.helpShown = true
+	}
 }
 
 func runBefore(ctx context.Context, cmdChain []*Command) (context.Context, error) {
