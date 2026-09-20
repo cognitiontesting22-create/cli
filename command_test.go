@@ -383,6 +383,98 @@ func (cc *ctxCollector) collect(ctx context.Context, fnName string) {
 	}
 }
 
+func TestCommand_Run_AfterOnlyRunsWhenBeforeRan(t *testing.T) {
+	buildApp := func(log *[]string) *Command {
+		hook := func(name string) func(context.Context, *Command) (context.Context, error) {
+			return func(ctx context.Context, _ *Command) (context.Context, error) {
+				*log = append(*log, name)
+				return ctx, nil
+			}
+		}
+		after := func(name string) func(context.Context, *Command) error {
+			return func(context.Context, *Command) error {
+				*log = append(*log, name)
+				return nil
+			}
+		}
+		return &Command{
+			Name:   "app",
+			Writer: io.Discard,
+			Before: hook("app.Before"),
+			After:  after("app.After"),
+			Commands: []*Command{
+				{
+					Name:   "sub",
+					Before: hook("sub.Before"),
+					After:  after("sub.After"),
+					Action: func(context.Context, *Command) error {
+						*log = append(*log, "sub.Action")
+						return nil
+					},
+					Commands: []*Command{
+						{
+							Name:  "nested",
+							After: after("nested.After"),
+							Action: func(context.Context, *Command) error {
+								*log = append(*log, "nested.Action")
+								return errors.New("nested failed")
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		args     []string
+		expected []string
+		wantErr  string
+	}{
+		{
+			name:     "normal run",
+			args:     []string{"app", "sub"},
+			expected: []string{"app.Before", "sub.Before", "sub.Action", "sub.After", "app.After"},
+		},
+		{
+			name:     "nested run with action error",
+			args:     []string{"app", "sub", "nested"},
+			expected: []string{"app.Before", "sub.Before", "nested.Action", "nested.After", "sub.After", "app.After"},
+			wantErr:  "nested failed",
+		},
+		{name: "root help", args: []string{"app", "--help"}},
+		{name: "sub help long", args: []string{"app", "sub", "--help"}},
+		{name: "sub help short", args: []string{"app", "sub", "-h"}},
+		{name: "sub help with trailing args", args: []string{"app", "sub", "--help", "nested"}},
+		{name: "nested help long", args: []string{"app", "sub", "nested", "--help"}},
+		{name: "nested help short", args: []string{"app", "sub", "nested", "-h"}},
+		{
+			name:     "help command for sub",
+			args:     []string{"app", "help", "sub"},
+			expected: []string{"app.Before", "app.After"},
+		},
+		{
+			name:     "help command under sub",
+			args:     []string{"app", "sub", "help"},
+			expected: []string{"app.Before", "sub.Before", "sub.After", "app.After"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var log []string
+			err := buildApp(&log).Run(buildTestContext(t), tt.args)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.expected, log)
+		})
+	}
+}
+
 func TestCommand_Run_BeforeReturnNewContextSubcommand(t *testing.T) {
 	bkey := ctxKey("bkey")
 	bkey2 := ctxKey("bkey2")

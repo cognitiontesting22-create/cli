@@ -133,6 +133,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 
 	tracef("setting self as cmd in context (cmd=%[1]q)", cmd.Name)
 	ctx = context.WithValue(ctx, commandContextKey, cmd)
+	cmd.helpShown = false
 
 	if cmd.parent == nil {
 		cmd.setupCommandGraph()
@@ -176,6 +177,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 
 		cmd.isInError = true
 		if cmd.checkHelp() {
+			cmd.helpShown = true
 			if cmd.parent == nil {
 				_ = ShowRootCommandHelp(cmd)
 			} else {
@@ -210,6 +212,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 	}
 
 	if cmd.checkHelp() {
+		cmd.helpShown = true
 		return ctx, helpCommandAction(ctx, cmd)
 	} else {
 		tracef("no help is wanted (cmd=%[1]q)", cmd.Name)
@@ -234,6 +237,10 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 
 	if cmd.After != nil && !cmd.Root().shellCompletion {
 		defer func() {
+			if cmd.helpShown {
+				tracef("skipping After since help was shown and Before did not run (cmd=%[1]q)", cmd.Name)
+				return
+			}
 			if err := cmd.After(ctx, cmd); err != nil {
 				err = cmd.handleExitCoder(ctx, err)
 
@@ -311,6 +318,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 		// function so any defer'd functions use the new context returned
 		// from the sub command.
 		ctx, err = subCmd.run(ctx, cmd.Args().Slice())
+		cmd.helpShown = subCmd.helpShown
 		return ctx, err
 	}
 
