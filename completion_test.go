@@ -435,6 +435,111 @@ func TestCompletionSubcommand(t *testing.T) {
 	}
 }
 
+func TestCompletionPartialFlagsAfterPositionals(t *testing.T) {
+	origArgv := os.Args
+	t.Cleanup(func() { os.Args = origArgv })
+
+	for _, path := range [][]string{
+		{"foo"},
+		{"foo", "sub"},
+		{"foo", "sub", "nested"},
+	} {
+		for _, test := range []struct {
+			name     string
+			args     []string
+			want     string
+			custom   bool
+			disabled bool
+		}{
+			{
+				name: "no positional arguments",
+				args: []string{"--pa"},
+				want: "--par1\n--par2\n",
+			},
+			{
+				name: "one positional argument",
+				args: []string{"value", "--pa"},
+				want: "--par1\n--par2\n",
+			},
+			{
+				name: "multiple positional arguments",
+				args: []string{"first", "second", "--pa"},
+				want: "--par1\n--par2\n",
+			},
+			{
+				name: "single dash",
+				args: []string{"value", "-"},
+				want: "--par1\n--par2\n--flag\n",
+			},
+			{
+				name: "single dash after multiple positional arguments",
+				args: []string{"first", "second", "-"},
+				want: "--par1\n--par2\n--flag\n",
+			},
+			{
+				name: "past double dash",
+				args: []string{"value", "--", "--pa"},
+			},
+			{
+				name:   "custom completion preserves arguments",
+				args:   []string{"value", "--pa"},
+				want:   "custom\n",
+				custom: true,
+			},
+			{
+				name:     "completion disabled",
+				args:     []string{"value", "--pa"},
+				disabled: true,
+			},
+		} {
+			t.Run(strings.Join(path, "/")+"/"+test.name, func(t *testing.T) {
+				out := &bytes.Buffer{}
+				actionRan := false
+				action := func(context.Context, *Command) error {
+					actionRan = true
+					return nil
+				}
+				nested := &Command{Name: "nested", HideHelp: true, Action: action}
+				sub := &Command{Name: "sub", HideHelp: true, Action: action, Commands: []*Command{nested}}
+				cmd := &Command{
+					Name:                  "foo",
+					EnableShellCompletion: !test.disabled,
+					HideHelp:              true,
+					Writer:                out,
+					ErrWriter:             io.Discard,
+					Action:                action,
+					Commands:              []*Command{sub},
+				}
+				target := []*Command{cmd, sub, nested}[len(path)-1]
+				target.Flags = []Flag{
+					&StringFlag{Name: "par1"},
+					&StringFlag{Name: "par2"},
+					&BoolFlag{Name: "flag"},
+					&StringFlag{Name: "par-hidden", Hidden: true},
+				}
+				if test.custom {
+					target.ShellComplete = func(ctx context.Context, c *Command) {
+						assert.Equal(t, test.args, c.Args().Slice())
+						fmt.Fprintln(c.Root().Writer, "custom")
+					}
+				}
+
+				args := append(append([]string{}, path...), test.args...)
+				args = append(args, completionFlag)
+				os.Args = args
+				err := cmd.Run(buildTestContext(t), args)
+				assert.False(t, actionRan, "completion must never run the command action")
+				if test.disabled {
+					require.EqualError(t, err, "flag provided but not defined: -pa")
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, test.want, out.String())
+				}
+			})
+		}
+	}
+}
+
 func TestCompletionAfterDoubleDashNeverRunsAction(t *testing.T) {
 	// Regression test for https://github.com/urfave/cli/issues/1993:
 	// pressing tab on a command line that holds a "--" must never execute
