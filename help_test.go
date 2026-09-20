@@ -858,6 +858,130 @@ GLOBAL OPTIONS:
 	assert.Contains(t, output.String(), expected, "expected output to include global options")
 }
 
+func TestShowSubcommandHelp_GlobalOptions_AllAncestors(t *testing.T) {
+	for depth := 0; depth <= 4; depth++ {
+		for _, hasChildren := range []bool{false, true} {
+			t.Run(fmt.Sprintf("depth=%d/children=%t", depth, hasChildren), func(t *testing.T) {
+				output := &bytes.Buffer{}
+				root := &Command{Name: "root", Writer: output}
+				current := root
+				args := []string{"root"}
+				for i := 0; i <= depth; i++ {
+					if i > 0 {
+						child := &Command{Name: fmt.Sprintf("child%d", i)}
+						current.Commands = []*Command{child}
+						current = child
+						args = append(args, child.Name)
+					}
+					current.Flags = []Flag{
+						&StringFlag{Name: fmt.Sprintf("persistent%d", i)},
+						&StringFlag{Name: fmt.Sprintf("local%d", i), Local: true},
+						&StringFlag{Name: fmt.Sprintf("hidden%d", i), Hidden: true},
+					}
+					current.MutuallyExclusiveFlags = []MutuallyExclusiveFlags{{
+						Flags: [][]Flag{{&StringFlag{Name: fmt.Sprintf("grouped%d", i)}}},
+					}}
+				}
+				if hasChildren {
+					current.Commands = []*Command{{Name: "child"}}
+				}
+
+				require.NoError(t, root.Run(buildTestContext(t), append(args, "--help")))
+				local, global, found := strings.Cut(output.String(), "\nGLOBAL OPTIONS:\n")
+				require.True(t, found, output.String())
+				for i := 0; i <= depth; i++ {
+					for _, prefix := range []string{"persistent", "grouped"} {
+						name := fmt.Sprintf("--%s%d", prefix, i)
+						assert.Equal(t, 1, strings.Count(output.String(), name), name)
+						if i < depth || depth == 0 {
+							assert.Contains(t, global, name)
+							assert.NotContains(t, local, name)
+						} else {
+							assert.Contains(t, local, name)
+							assert.NotContains(t, global, name)
+						}
+					}
+					assert.NotContains(t, output.String(), fmt.Sprintf("--hidden%d", i))
+					if i < depth {
+						assert.NotContains(t, output.String(), fmt.Sprintf("--local%d", i))
+					} else if depth == 0 {
+						assert.Contains(t, global, "--local0")
+					} else {
+						assert.Contains(t, local, fmt.Sprintf("--local%d", i))
+						assert.NotContains(t, global, fmt.Sprintf("--local%d", i))
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestShowSubcommandHelp_GlobalOptions_Shadowing(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		onLeaf bool
+		local  bool
+		hidden bool
+		alias  bool
+	}{
+		{name: "ancestor persistent"},
+		{name: "ancestor local", local: true},
+		{name: "ancestor hidden", hidden: true},
+		{name: "ancestor alias", alias: true},
+		{name: "own persistent", onLeaf: true},
+		{name: "own local", onLeaf: true, local: true},
+		{name: "own hidden", onLeaf: true, hidden: true},
+		{name: "own alias", onLeaf: true, alias: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := &bytes.Buffer{}
+			leaf := &Command{Name: "leaf"}
+			mid := &Command{Name: "mid", Commands: []*Command{leaf}}
+			root := &Command{
+				Name: "root", Writer: output,
+				Flags: []Flag{
+					&StringFlag{Name: "shared", Usage: "shadowed definition"},
+					&StringFlag{Name: "unrelated"},
+				},
+				Commands: []*Command{mid},
+			}
+			nearer := &StringFlag{
+				Name: "shared", Usage: "nearest definition", Local: test.local, Hidden: test.hidden,
+			}
+			if test.alias {
+				nearer.Name = "renamed"
+				nearer.Aliases = []string{"shared"}
+			}
+			if test.onLeaf {
+				mid.Flags = []Flag{&StringFlag{Name: "shared", Usage: "shadowed intermediate definition"}}
+				leaf.Flags = []Flag{nearer}
+			} else {
+				mid.Flags = []Flag{nearer}
+			}
+
+			require.NoError(t, root.Run(buildTestContext(t), []string{"root", "mid", "leaf", "--help"}))
+			local, global, found := strings.Cut(output.String(), "\nGLOBAL OPTIONS:\n")
+			require.True(t, found, output.String())
+			assert.Contains(t, global, "--unrelated")
+			assert.NotContains(t, output.String(), "shadowed definition")
+			assert.NotContains(t, output.String(), "shadowed intermediate definition")
+			if test.hidden || (test.local && !test.onLeaf) {
+				assert.NotContains(t, output.String(), "--shared")
+				assert.NotContains(t, output.String(), "nearest definition")
+			} else {
+				assert.Equal(t, 1, strings.Count(output.String(), "--shared"))
+				if test.onLeaf {
+					assert.Contains(t, local, "nearest definition")
+					assert.NotContains(t, global, "nearest definition")
+				} else {
+					assert.Contains(t, global, "nearest definition")
+					assert.NotContains(t, local, "nearest definition")
+				}
+			}
+		})
+	}
+}
+
 func TestShowSubcommandHelp_GlobalOptions_HideHelpCommand(t *testing.T) {
 	cmd := &Command{
 		Flags: []Flag{
