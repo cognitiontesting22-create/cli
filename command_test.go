@@ -1743,6 +1743,104 @@ func TestCommand_BeforeAfterFuncShellCompletion(t *testing.T) {
 	r.Equal(0, counts.SubCommand, "SubCommand was run")
 }
 
+func TestCommand_BeforeAfterHelp(t *testing.T) {
+	actionErr := errors.New("action failed")
+	for _, test := range []struct {
+		name       string
+		args       []string
+		afterOnly  bool
+		actionErr  error
+		wantCalls  []string
+		helpOutput bool
+	}{
+		{name: "root long help", args: []string{"--help"}, helpOutput: true},
+		{name: "root short help", args: []string{"-h"}, helpOutput: true},
+		{name: "subcommand long help", args: []string{"sub", "--help"}, helpOutput: true},
+		{name: "subcommand short help", args: []string{"sub", "-h"}, helpOutput: true},
+		{name: "nested long help", args: []string{"sub", "nested", "--help"}, helpOutput: true},
+		{name: "nested short help", args: []string{"sub", "nested", "-h"}, helpOutput: true},
+		{name: "long help before argument", args: []string{"sub", "--help", "nested"}, helpOutput: true},
+		{name: "short help before argument", args: []string{"sub", "-h", "nested"}, helpOutput: true},
+		{name: "help with invalid flag", args: []string{"sub", "nested", "--help", "--undefined"}, helpOutput: true},
+		{name: "help without before", args: []string{"sub", "--help"}, afterOnly: true, helpOutput: true},
+		{name: "nested help without before", args: []string{"sub", "nested", "-h"}, afterOnly: true, helpOutput: true},
+		{
+			name: "normal subcommand", args: []string{"sub"},
+			wantCalls: []string{"app.Before", "sub.Before", "sub.Action", "sub.After", "app.After"},
+		},
+		{
+			name: "normal nested command", args: []string{"sub", "nested"},
+			wantCalls: []string{"app.Before", "sub.Before", "nested.Before", "nested.Action", "nested.After", "sub.After", "app.After"},
+		},
+		{
+			name: "action error", args: []string{"sub"}, actionErr: actionErr,
+			wantCalls: []string{"app.Before", "sub.Before", "sub.Action", "sub.After", "app.After"},
+		},
+		{
+			name: "nested action error", args: []string{"sub", "nested"}, actionErr: actionErr,
+			wantCalls: []string{"app.Before", "sub.Before", "nested.Before", "nested.Action", "nested.After", "sub.After", "app.After"},
+		},
+		{
+			name: "normal without before", args: []string{"sub"}, afterOnly: true,
+			wantCalls: []string{"sub.Action", "sub.After", "app.After"},
+		},
+		{
+			name: "root help command", args: []string{"help"}, helpOutput: true,
+			wantCalls: []string{"app.Before", "app.After"},
+		},
+		{
+			name: "help command with topic", args: []string{"help", "sub"}, helpOutput: true,
+			wantCalls: []string{"app.Before", "app.After"},
+		},
+		{
+			name: "subcommand help command", args: []string{"sub", "help"}, helpOutput: true,
+			wantCalls: []string{"app.Before", "sub.Before", "sub.After", "app.After"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls []string
+			var output bytes.Buffer
+			newCommand := func(name string) *Command {
+				cmd := &Command{
+					Name: name,
+					Action: func(context.Context, *Command) error {
+						calls = append(calls, name+".Action")
+						return test.actionErr
+					},
+					After: func(context.Context, *Command) error {
+						calls = append(calls, name+".After")
+						return nil
+					},
+				}
+				if !test.afterOnly {
+					cmd.Before = func(ctx context.Context, _ *Command) (context.Context, error) {
+						calls = append(calls, name+".Before")
+						return ctx, nil
+					}
+				}
+				return cmd
+			}
+			app, sub, nested := newCommand("app"), newCommand("sub"), newCommand("nested")
+			app.Commands = []*Command{sub}
+			sub.Commands = []*Command{nested}
+			app.Writer = &output
+			app.ErrWriter = io.Discard
+
+			err := app.Run(buildTestContext(t), append([]string{"app"}, test.args...))
+			if test.actionErr != nil {
+				require.ErrorIs(t, err, test.actionErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, test.wantCalls, calls)
+			if test.helpOutput {
+				assert.Contains(t, output.String(), "NAME:")
+				assert.Contains(t, output.String(), "USAGE:")
+			}
+		})
+	}
+}
+
 func TestCommand_AfterFunc(t *testing.T) {
 	counts := &opCounts{}
 	afterError := fmt.Errorf("fail")

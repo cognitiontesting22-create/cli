@@ -90,11 +90,12 @@ outer:
 // arguments are parsed according to the Flag and Command
 // definitions and the matching Action functions are run.
 func (cmd *Command) Run(ctx context.Context, osArgs []string) (deferErr error) {
-	_, deferErr = cmd.run(ctx, osArgs)
+	var helpRequested bool
+	_, deferErr = cmd.run(ctx, osArgs, &helpRequested)
 	return deferErr
 }
 
-func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context, deferErr error) {
+func (cmd *Command) run(ctx context.Context, osArgs []string, helpRequested *bool) (_ context.Context, deferErr error) {
 	tracef("running with arguments %[1]q (cmd=%[2]q)", osArgs, cmd.Name)
 	cmd.setupDefaults(osArgs)
 
@@ -176,6 +177,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 
 		cmd.isInError = true
 		if cmd.checkHelp() {
+			*helpRequested = true
 			if cmd.parent == nil {
 				_ = ShowRootCommandHelp(cmd)
 			} else {
@@ -210,6 +212,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 	}
 
 	if cmd.checkHelp() {
+		*helpRequested = true
 		return ctx, helpCommandAction(ctx, cmd)
 	} else {
 		tracef("no help is wanted (cmd=%[1]q)", cmd.Name)
@@ -234,6 +237,10 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 
 	if cmd.After != nil && !cmd.Root().shellCompletion {
 		defer func() {
+			// A help flag on any descendant returns before the Before chain runs.
+			if *helpRequested {
+				return
+			}
 			if err := cmd.After(ctx, cmd); err != nil {
 				err = cmd.handleExitCoder(ctx, err)
 
@@ -310,7 +317,7 @@ func (cmd *Command) run(ctx context.Context, osArgs []string) (_ context.Context
 		// It is important that we overwrite the ctx variable in the current
 		// function so any defer'd functions use the new context returned
 		// from the sub command.
-		ctx, err = subCmd.run(ctx, cmd.Args().Slice())
+		ctx, err = subCmd.run(ctx, cmd.Args().Slice(), helpRequested)
 		return ctx, err
 	}
 
