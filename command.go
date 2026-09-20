@@ -304,18 +304,64 @@ func (cmd *Command) appendFlag(fl Flag) {
 	}
 }
 
-// VisiblePersistentFlags returns a slice of [LocalFlag] with Persistent=true and Hidden=false.
+// VisiblePersistentFlags returns a slice of [LocalFlag] with Persistent=true and Hidden=false
+// inherited from all ancestor commands. Flags shadowed by a definition on a nearer
+// command (including cmd itself) are omitted, so each flag name appears at most once.
+// For the root command it returns the root's own persistent flags.
 func (cmd *Command) VisiblePersistentFlags() []Flag {
 	if cmd.isCompletionCommand {
 		return nil
 	}
+
 	var flags []Flag
-	for _, fl := range cmd.Root().Flags {
-		pfl, ok := fl.(LocalFlag)
-		if !ok || pfl.IsLocal() {
-			continue
+	if cmd.parent == nil {
+		for _, fl := range cmd.Flags {
+			pfl, ok := fl.(LocalFlag)
+			if !ok || pfl.IsLocal() {
+				continue
+			}
+			flags = append(flags, fl)
 		}
-		flags = append(flags, fl)
+		return visibleFlags(flags)
+	}
+
+	seen := map[string]struct{}{}
+	for _, fl := range cmd.allFlags() {
+		for _, name := range fl.Names() {
+			seen[name] = struct{}{}
+		}
+	}
+
+	// walk nearest ancestor first so nearer definitions shadow farther ones,
+	// but emit root-most flags first in the final list
+	var groups [][]Flag
+	for pCmd := cmd.parent; pCmd != nil; pCmd = pCmd.parent {
+		var group []Flag
+		for _, fl := range pCmd.allFlags() {
+			pfl, ok := fl.(LocalFlag)
+			if !ok || pfl.IsLocal() {
+				continue
+			}
+
+			shadowed := false
+			for _, name := range fl.Names() {
+				if _, ok := seen[name]; ok {
+					shadowed = true
+					break
+				}
+			}
+			if shadowed {
+				continue
+			}
+			for _, name := range fl.Names() {
+				seen[name] = struct{}{}
+			}
+			group = append(group, fl)
+		}
+		groups = append(groups, group)
+	}
+	for i := len(groups) - 1; i >= 0; i-- {
+		flags = append(flags, groups[i]...)
 	}
 	return visibleFlags(flags)
 }

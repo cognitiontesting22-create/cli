@@ -832,8 +832,11 @@ func (cmd *Command) VisibleFlags() []Flag
     VisibleFlags returns a slice of the Flags with Hidden=false
 
 func (cmd *Command) VisiblePersistentFlags() []Flag
-    VisiblePersistentFlags returns a slice of LocalFlag with Persistent=true and
-    Hidden=false.
+    VisiblePersistentFlags returns a slice of LocalFlag with Persistent=true
+    and Hidden=false inherited from all ancestor commands. Flags shadowed
+    by a definition on a nearer command (including cmd itself) are omitted,
+    so each flag name appears at most once. For the root command it returns the
+    root's own persistent flags.
 
 func (cmd *Command) Walk(fn func(*Command) error) error
     Walk visits cmd and every descendant. If fn returns a non-nil error,

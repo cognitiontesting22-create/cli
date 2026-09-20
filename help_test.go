@@ -2286,3 +2286,92 @@ func TestCustomUsageCommandHelp(t *testing.T) {
 	_ = cmd.Run(buildTestContext(t), []string{"app", "help"})
 	assert.Contains(t, out.String(), UsageCommandHelp)
 }
+
+func TestVisiblePersistentFlagsFromAncestors(t *testing.T) {
+	out := &bytes.Buffer{}
+	cmd := &Command{
+		Name: "root",
+		Flags: []Flag{
+			&StringFlag{Name: "root-persistent", Usage: "persistent flag on root"},
+			&StringFlag{Name: "root-local", Usage: "local flag on root", Local: true},
+			&StringFlag{Name: "root-hidden", Usage: "hidden flag on root", Hidden: true},
+			&StringFlag{Name: "shadowed", Usage: "root definition"},
+		},
+		Commands: []*Command{{
+			Name: "mid",
+			Flags: []Flag{
+				&StringFlag{Name: "mid-persistent", Usage: "persistent flag on mid"},
+				&StringFlag{Name: "mid-local", Usage: "local flag on mid", Local: true},
+				&StringFlag{Name: "mid-hidden", Usage: "hidden flag on mid", Hidden: true},
+				&StringFlag{Name: "shadowed", Usage: "mid definition"},
+			},
+			Commands: []*Command{{
+				Name:  "leaf",
+				Flags: []Flag{&StringFlag{Name: "leaf-local", Usage: "local flag on leaf"}},
+			}},
+		}},
+		Writer:    out,
+		ErrWriter: out,
+	}
+
+	r := require.New(t)
+
+	// leaf help: inherits persistent flags from root and mid, nearest shadowed wins
+	r.NoError(cmd.Run(buildTestContext(t), []string{"root", "mid", "leaf", "--help"}))
+	leafHelp := out.String()
+	r.Contains(leafHelp, `OPTIONS:
+   --leaf-local string  local flag on leaf
+   --help, -h           show help
+
+GLOBAL OPTIONS:
+   --root-persistent string  persistent flag on root
+   --mid-persistent string   persistent flag on mid
+   --shadowed string         mid definition
+`)
+	r.NotContains(leafHelp, "root definition")
+	r.NotContains(leafHelp, "root-local")
+	r.NotContains(leafHelp, "mid-local")
+	r.NotContains(leafHelp, "root-hidden")
+	r.NotContains(leafHelp, "mid-hidden")
+	r.Equal(1, strings.Count(leafHelp, "--shadowed"))
+	r.Equal(1, strings.Count(leafHelp, "--leaf-local"))
+
+	// mid help: own flags under OPTIONS, only root's persistent flags under GLOBAL OPTIONS,
+	// and its own --shadowed hides root's definition
+	out.Reset()
+	r.NoError(cmd.Run(buildTestContext(t), []string{"root", "mid", "--help"}))
+	midHelp := out.String()
+	r.Contains(midHelp, `OPTIONS:
+   --mid-persistent string  persistent flag on mid
+   --mid-local string       local flag on mid
+   --shadowed string        mid definition
+   --help, -h               show help
+
+GLOBAL OPTIONS:
+   --root-persistent string  persistent flag on root
+`)
+	r.NotContains(midHelp, "root definition")
+	r.Equal(1, strings.Count(midHelp, "--shadowed"))
+	r.Equal(1, strings.Count(midHelp, "--mid-persistent"))
+
+	// root help: unchanged
+	out.Reset()
+	r.NoError(cmd.Run(buildTestContext(t), []string{"root", "--help"}))
+	rootHelp := out.String()
+	r.Contains(rootHelp, `GLOBAL OPTIONS:
+   --root-persistent string  persistent flag on root
+   --root-local string       local flag on root
+   --shadowed string         root definition
+   --help, -h                show help
+`)
+	r.NotContains(rootHelp, "mid-persistent")
+
+	// parsing is unchanged
+	var got string
+	cmd.Commands[0].Commands[0].Action = func(_ context.Context, c *Command) error {
+		got = c.String("mid-persistent") + "/" + c.String("root-persistent")
+		return nil
+	}
+	r.NoError(cmd.Run(buildTestContext(t), []string{"root", "--root-persistent", "R", "mid", "leaf", "--mid-persistent", "M"}))
+	r.Equal("M/R", got)
+}
