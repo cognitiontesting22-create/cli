@@ -310,12 +310,25 @@ func (cmd *Command) VisiblePersistentFlags() []Flag {
 		return nil
 	}
 	var flags []Flag
-	for _, fl := range cmd.Root().Flags {
-		pfl, ok := fl.(LocalFlag)
-		if !ok || pfl.IsLocal() {
-			continue
+	lineage := cmd.Lineage()
+	for i := len(lineage) - 1; i > 0; i-- {
+		for _, fl := range lineage[i].allFlags() {
+			pfl, ok := fl.(LocalFlag)
+			if !ok || pfl.IsLocal() {
+				continue
+			}
+			applies := true
+			for _, name := range fl.Names() {
+				if cmd.lookupFlag(name) != fl {
+					applies = false
+					break
+				}
+			}
+			if !applies {
+				continue
+			}
+			flags = append(flags, fl)
 		}
-		flags = append(flags, fl)
 	}
 	return visibleFlags(flags)
 }

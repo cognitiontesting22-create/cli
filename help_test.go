@@ -904,6 +904,119 @@ GLOBAL OPTIONS:
 	assert.Contains(t, output.String(), expected, "expected output to include global options")
 }
 
+func TestShowSubcommandHelp_PersistentFlagsFromAllAncestors(t *testing.T) {
+	cmd := &Command{
+		Name: "root",
+		Flags: []Flag{
+			&StringFlag{Name: "root-persistent", Usage: "persistent flag on root"},
+		},
+		Commands: []*Command{{
+			Name: "mid",
+			Flags: []Flag{
+				&StringFlag{Name: "mid-persistent", Usage: "persistent flag on mid"},
+				&StringFlag{Name: "mid-local", Usage: "local flag on mid", Local: true},
+			},
+			Commands: []*Command{{
+				Name:  "leaf",
+				Flags: []Flag{&StringFlag{Name: "leaf-local", Usage: "local flag on leaf"}},
+			}},
+		}},
+	}
+
+	output := &bytes.Buffer{}
+	cmd.Writer = output
+
+	require.NoError(t, cmd.Run(buildTestContext(t), []string{"root", "mid", "leaf", "--help"}))
+
+	expected := `NAME:
+   root mid leaf
+
+USAGE:
+   root mid leaf [options]
+
+OPTIONS:
+   --leaf-local string  local flag on leaf
+   --help, -h           show help
+
+GLOBAL OPTIONS:
+   --root-persistent string  persistent flag on root
+   --mid-persistent string   persistent flag on mid
+`
+
+	assert.Equal(t, expected, output.String())
+}
+
+func TestShowSubcommandHelp_PersistentFlagShadowedByNearerAncestor(t *testing.T) {
+	cmd := &Command{
+		Name: "root",
+		Flags: []Flag{
+			&StringFlag{Name: "shared", Usage: "from root"},
+		},
+		Commands: []*Command{{
+			Name: "mid",
+			Flags: []Flag{
+				&StringFlag{Name: "shared", Usage: "from mid"},
+			},
+			Commands: []*Command{{
+				Name: "leaf",
+			}},
+		}},
+	}
+
+	output := &bytes.Buffer{}
+	cmd.Writer = output
+
+	require.NoError(t, cmd.Run(buildTestContext(t), []string{"root", "mid", "leaf", "--help"}))
+
+	expected := `NAME:
+   root mid leaf
+
+USAGE:
+   root mid leaf [options]
+
+OPTIONS:
+   --help, -h  show help
+
+GLOBAL OPTIONS:
+   --shared string  from mid
+`
+
+	assert.Equal(t, expected, output.String())
+}
+
+func TestShowSubcommandHelp_PersistentFlagShadowedByOwnFlag(t *testing.T) {
+	cmd := &Command{
+		Name: "root",
+		Flags: []Flag{
+			&StringFlag{Name: "shared", Usage: "from root"},
+		},
+		Commands: []*Command{{
+			Name: "leaf",
+			Flags: []Flag{
+				&StringFlag{Name: "shared", Usage: "from leaf", Local: true},
+			},
+		}},
+	}
+
+	output := &bytes.Buffer{}
+	cmd.Writer = output
+
+	require.NoError(t, cmd.Run(buildTestContext(t), []string{"root", "leaf", "--help"}))
+
+	expected := `NAME:
+   root leaf
+
+USAGE:
+   root leaf [options]
+
+OPTIONS:
+   --shared string  from leaf
+   --help, -h       show help
+`
+
+	assert.Equal(t, expected, output.String())
+}
+
 func TestShowSubcommandHelp_SubcommandUsageText(t *testing.T) {
 	cmd := &Command{
 		Commands: []*Command{
