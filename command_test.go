@@ -1691,6 +1691,110 @@ func TestCommand_BeforeFuncPersistentFlag(t *testing.T) {
 	assert.Equal(t, 1, counts.SubCommand, "Subcommand not executed when expected")
 }
 
+func TestCommand_BeforeAfterHelpFlag(t *testing.T) {
+	for _, before := range []bool{true, false} {
+		for _, flag := range []string{"--help", "-h"} {
+			for _, args := range [][]string{
+				{"app", flag},
+				{"app", "sub", flag},
+				{"app", "sub", "nested", flag},
+				{"app", "sub", flag, "nested"},
+				{"app", "sub", flag, "--undefined"},
+				{"app", "sub", "nested", flag, "--undefined"},
+			} {
+				t.Run(fmt.Sprintf("before=%t/%s", before, strings.Join(args, " ")), func(t *testing.T) {
+					var calls []string
+					var output bytes.Buffer
+					newCommand := func(name string) *Command {
+						cmd := &Command{
+							Name: name,
+							Action: func(context.Context, *Command) error {
+								calls = append(calls, name+".Action")
+								return nil
+							},
+							After: func(context.Context, *Command) error {
+								calls = append(calls, name+".After")
+								return nil
+							},
+						}
+						if before {
+							cmd.Before = func(ctx context.Context, _ *Command) (context.Context, error) {
+								calls = append(calls, name+".Before")
+								return ctx, nil
+							}
+						}
+						return cmd
+					}
+					app, sub, nested := newCommand("app"), newCommand("sub"), newCommand("nested")
+					app.Writer = &output
+					app.Commands = []*Command{sub}
+					sub.Commands = []*Command{nested}
+
+					require.NoError(t, app.Run(buildTestContext(t), args))
+					assert.Empty(t, calls)
+					assert.Contains(t, output.String(), "NAME:")
+
+					// Callbacks must not affect the help output.
+					wantOutput := output.String()
+					output.Reset()
+					for _, cmd := range []*Command{app, sub, nested} {
+						cmd.Before, cmd.After = nil, nil
+					}
+					require.NoError(t, app.Run(buildTestContext(t), args))
+					assert.Equal(t, wantOutput, output.String())
+				})
+			}
+		}
+	}
+}
+
+func TestCommand_BeforeAfterOrder(t *testing.T) {
+	actionErr := errors.New("action failed")
+	for _, test := range []struct {
+		name      string
+		args      []string
+		actionErr error
+		want      []string
+	}{
+		{"subcommand", []string{"app", "sub"}, nil, []string{"app.Before", "sub.Before", "sub.Action", "sub.After", "app.After"}},
+		{"nested", []string{"app", "sub", "nested"}, nil, []string{"app.Before", "sub.Before", "nested.Before", "nested.Action", "nested.After", "sub.After", "app.After"}},
+		{"action error", []string{"app", "sub"}, actionErr, []string{"app.Before", "sub.Before", "sub.Action", "sub.After", "app.After"}},
+		{"nested action error", []string{"app", "sub", "nested"}, actionErr, []string{"app.Before", "sub.Before", "nested.Before", "nested.Action", "nested.After", "sub.After", "app.After"}},
+		{"help", []string{"app", "help"}, nil, []string{"app.Before", "app.After"}},
+		{"help subcommand", []string{"app", "help", "sub"}, nil, []string{"app.Before", "app.After"}},
+		{"subcommand help", []string{"app", "sub", "help"}, nil, []string{"app.Before", "sub.Before", "sub.After", "app.After"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls []string
+			newCommand := func(name string) *Command {
+				return &Command{
+					Name: name,
+					Before: func(ctx context.Context, _ *Command) (context.Context, error) {
+						calls = append(calls, name+".Before")
+						return ctx, nil
+					},
+					Action: func(context.Context, *Command) error {
+						calls = append(calls, name+".Action")
+						return test.actionErr
+					},
+					After: func(context.Context, *Command) error {
+						calls = append(calls, name+".After")
+						return nil
+					},
+				}
+			}
+			app, sub, nested := newCommand("app"), newCommand("sub"), newCommand("nested")
+			app.Writer = io.Discard
+			app.Commands = []*Command{sub}
+			sub.Commands = []*Command{nested}
+
+			err := app.Run(buildTestContext(t), test.args)
+			require.ErrorIs(t, err, test.actionErr)
+			assert.Equal(t, test.want, calls)
+		})
+	}
+}
+
 func TestCommand_BeforeAfterFuncShellCompletion(t *testing.T) {
 	t.Skip("TODO: is '--generate-shell-completion' (flag) still supported?")
 
