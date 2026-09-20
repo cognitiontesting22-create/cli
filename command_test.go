@@ -3167,6 +3167,146 @@ func TestShellCompletionForIncompleteFlags(t *testing.T) {
 	assert.NoError(t, err, "app should not return an error")
 }
 
+func TestShellCompletionPartialFlagAfterPositionalArgs(t *testing.T) {
+	origArgv := os.Args
+	t.Cleanup(func() { os.Args = origArgv })
+
+	newCmd := func(actionRan *bool) *Command {
+		action := func(context.Context, *Command) error {
+			*actionRan = true
+			return nil
+		}
+		return &Command{
+			Name:                  "command",
+			EnableShellCompletion: true,
+			Flags: []Flag{
+				&StringFlag{Name: "parent"},
+				&StringFlag{Name: "pastel"},
+			},
+			Commands: []*Command{
+				{
+					Name: "sub",
+					Flags: []Flag{
+						&StringFlag{Name: "par1"},
+						&StringFlag{Name: "par2"},
+						&BoolFlag{Name: "flag"},
+						&BoolFlag{Name: "pahidden", Hidden: true},
+					},
+					Commands: []*Command{
+						{
+							Name: "nested",
+							Flags: []Flag{
+								&StringFlag{Name: "path"},
+								&BoolFlag{Name: "verbose"},
+							},
+							Action: action,
+						},
+					},
+					Action: action,
+				},
+			},
+			Action: action,
+		}
+	}
+
+	for _, tc := range []struct {
+		name     string
+		argv     []string
+		expected string
+	}{
+		{
+			name:     "sub-no-positional",
+			argv:     []string{"command", "sub", "--pa", completionFlag},
+			expected: "--par1\n--par2\n",
+		},
+		{
+			name:     "sub-one-positional",
+			argv:     []string{"command", "sub", "value", "--pa", completionFlag},
+			expected: "--par1\n--par2\n",
+		},
+		{
+			name:     "sub-two-positionals",
+			argv:     []string{"command", "sub", "first", "second", "--pa", completionFlag},
+			expected: "--par1\n--par2\n",
+		},
+		{
+			name:     "sub-positional-single-dash-lists-all-visible-flags",
+			argv:     []string{"command", "sub", "value", "-", completionFlag},
+			expected: "--par1\n--par2\n--flag\n--help:show help\n",
+		},
+		{
+			name:     "sub-positional-no-flag-lists-commands",
+			argv:     []string{"command", "sub", "value", completionFlag},
+			expected: "nested\nhelp:Shows a list of commands or help for one command\n",
+		},
+		{
+			name:     "nested-positional",
+			argv:     []string{"command", "sub", "nested", "value", "--pa", completionFlag},
+			expected: "--path\n",
+		},
+		{
+			name:     "nested-two-positionals",
+			argv:     []string{"command", "sub", "nested", "first", "second", "--ver", completionFlag},
+			expected: "--verbose\n",
+		},
+		{
+			name:     "root-no-positional",
+			argv:     []string{"command", "--pa", completionFlag},
+			expected: "--parent\n--pastel\n",
+		},
+		{
+			name:     "root-positional",
+			argv:     []string{"command", "value", "--pa", completionFlag},
+			expected: "--parent\n--pastel\n",
+		},
+		{
+			name:     "sub-positional-after-double-dash",
+			argv:     []string{"command", "sub", "value", "--", "--pa", completionFlag},
+			expected: "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actionRan := false
+			cmd := newCmd(&actionRan)
+			writer := &bytes.Buffer{}
+			cmd.Writer = writer
+			os.Args = tc.argv
+
+			err := cmd.Run(buildTestContext(t), tc.argv)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, writer.String())
+			assert.False(t, actionRan, "completion must not run the action")
+		})
+	}
+
+	t.Run("custom-shell-complete-receives-args-unchanged", func(t *testing.T) {
+		actionRan := false
+		cmd := newCmd(&actionRan)
+		cmd.Writer = io.Discard
+		var got []string
+		cmd.Commands[0].ShellComplete = func(_ context.Context, c *Command) {
+			got = c.Args().Slice()
+		}
+
+		err := cmd.Run(buildTestContext(t), []string{"command", "sub", "value", "--pa", completionFlag})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"value", "--pa"}, got)
+		assert.False(t, actionRan)
+	})
+
+	t.Run("completion-disabled-unknown-flag-is-error", func(t *testing.T) {
+		actionRan := false
+		cmd := newCmd(&actionRan)
+		cmd.EnableShellCompletion = false
+		cmd.Writer = io.Discard
+		cmd.ErrWriter = io.Discard
+
+		err := cmd.Run(buildTestContext(t), []string{"command", "sub", "value", "--pa"})
+		require.Error(t, err)
+		assert.False(t, actionRan)
+	})
+}
+
 func TestWhenExitSubCommandWithCodeThenCommandQuitUnexpectedly(t *testing.T) {
 	testCode := 104
 
