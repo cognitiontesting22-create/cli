@@ -309,13 +309,41 @@ func (cmd *Command) VisiblePersistentFlags() []Flag {
 	if cmd.isCompletionCommand {
 		return nil
 	}
-	var flags []Flag
-	for _, fl := range cmd.Root().Flags {
-		pfl, ok := fl.(LocalFlag)
-		if !ok || pfl.IsLocal() {
-			continue
+
+	// Flag names defined on this command shadow any ancestor flag of
+	// the same name.
+	seen := map[string]struct{}{}
+	for _, fl := range cmd.allFlags() {
+		for _, name := range fl.Names() {
+			seen[name] = struct{}{}
 		}
-		flags = append(flags, fl)
+	}
+
+	var flags []Flag
+	for pCmd := cmd.parent; pCmd != nil; pCmd = pCmd.parent {
+		var pfls []Flag
+		for _, fl := range pCmd.allFlags() {
+			pfl, ok := fl.(LocalFlag)
+			if !ok || pfl.IsLocal() {
+				continue
+			}
+			if slices.ContainsFunc(fl.Names(), func(name string) bool {
+				_, ok := seen[name]
+				return ok
+			}) {
+				continue
+			}
+			pfls = append(pfls, fl)
+		}
+		// all flag names on a nearer command shadow same-named flags
+		// defined on farther ancestors
+		for _, fl := range pCmd.allFlags() {
+			for _, name := range fl.Names() {
+				seen[name] = struct{}{}
+			}
+		}
+		// prepend so that flags from higher ancestors are listed first
+		flags = append(pfls, flags...)
 	}
 	return visibleFlags(flags)
 }

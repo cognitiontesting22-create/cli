@@ -904,6 +904,119 @@ GLOBAL OPTIONS:
 	assert.Contains(t, output.String(), expected, "expected output to include global options")
 }
 
+func TestShowSubcommandHelp_GlobalOptions_NestedPersistentFlags(t *testing.T) {
+	cmd := &Command{
+		Name: "root",
+		Flags: []Flag{
+			&StringFlag{
+				Name:  "root-persistent",
+				Usage: "persistent flag on root",
+				Local: false,
+			},
+		},
+		Commands: []*Command{
+			{
+				Name: "mid",
+				Flags: []Flag{
+					&StringFlag{
+						Name:  "mid-persistent",
+						Usage: "persistent flag on mid",
+						Local: false,
+					},
+					&StringFlag{
+						Name:  "mid-local",
+						Usage: "local flag on mid",
+						Local: true,
+					},
+				},
+				Commands: []*Command{
+					{
+						Name: "leaf",
+						Flags: []Flag{
+							&StringFlag{
+								Name:  "leaf-local",
+								Usage: "local flag on leaf",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	output := &bytes.Buffer{}
+	cmd.Writer = output
+
+	_ = cmd.Run(buildTestContext(t), []string{"root", "mid", "leaf", "--help"})
+
+	expected := `OPTIONS:
+   --leaf-local string  local flag on leaf
+   --help, -h           show help
+
+GLOBAL OPTIONS:
+   --root-persistent string  persistent flag on root
+   --mid-persistent string   persistent flag on mid
+`
+
+	assert.Contains(t, output.String(), expected, "expected output to include inherited persistent flags")
+	assert.NotContains(t, output.String(), "mid-local", "expected local ancestor flags to be excluded")
+}
+
+func TestShowSubcommandHelp_GlobalOptions_PersistentFlagShadowing(t *testing.T) {
+	cmd := &Command{
+		Name: "root",
+		Flags: []Flag{
+			&StringFlag{
+				Name:  "shared",
+				Usage: "persistent flag on root",
+				Local: false,
+			},
+			&StringFlag{
+				Name:  "root-only",
+				Usage: "root only persistent flag",
+				Local: false,
+			},
+		},
+		Commands: []*Command{
+			{
+				Name: "mid",
+				Flags: []Flag{
+					&StringFlag{
+						Name:  "shared",
+						Usage: "persistent flag on mid",
+						Local: false,
+					},
+				},
+				Commands: []*Command{
+					{
+						Name: "leaf",
+						Flags: []Flag{
+							&StringFlag{
+								Name:  "root-only",
+								Usage: "leaf local flag shadowing root",
+								Local: true,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	output := &bytes.Buffer{}
+	cmd.Writer = output
+
+	_ = cmd.Run(buildTestContext(t), []string{"root", "mid", "leaf", "--help"})
+
+	out := output.String()
+	assert.Contains(t, out, "GLOBAL OPTIONS:\n   --shared string  persistent flag on mid\n",
+		"expected only the nearest persistent flag definition")
+	assert.NotContains(t, out, "persistent flag on root",
+		"expected shadowed root persistent flag to be excluded")
+	assert.NotContains(t, out, "root only persistent flag",
+		"expected root persistent flag shadowed by leaf local flag to be excluded")
+}
+
 func TestShowSubcommandHelp_SubcommandUsageText(t *testing.T) {
 	cmd := &Command{
 		Commands: []*Command{
