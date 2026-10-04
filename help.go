@@ -103,7 +103,7 @@ func helpCommandAction(ctx context.Context, cmd *Command) error {
 	//   $ app foo help / h     # subcommand on subcommand; show help for "foo"
 	//   $ app foo (no action)  # default action on subcommand; show help for "foo"
 
-	// Case 4. when executing a help command set the context to parent
+	// Case 4. When executing a help command set the context to parent
 	// to allow resolution of subsequent args. This will transform
 	// $ app help foo
 	//     to
